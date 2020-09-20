@@ -44,7 +44,7 @@ int sendAllTo(int sockfd, char *buf, int buf_len, int flags, struct sockaddr_in 
 int main(int argc, char **argv) {
   int sockfd; /* socket */
   int portno; /* port to listen on */
-  int clientlen; /* byte size of client's address */
+  unsigned int clientlen; /* byte size of client's address */
   struct sockaddr_in serveraddr; /* server's addr */
   struct sockaddr_in clientaddr; /* client addr */
   struct hostent *hostp; /* client host info */
@@ -53,7 +53,8 @@ int main(int argc, char **argv) {
   int optval; /* flag value for setsockopt */
   int n; /* message byte size */
   char type[10];
-
+  char filename[256];
+  long filesize, bytes_written = 0, bytes_sent = 0, bytes_read;
   FILE *file;
   DIR *dir;
   /* 
@@ -123,16 +124,74 @@ int main(int argc, char **argv) {
       error("ERROR on inet_ntoa\n");
     printf("server received datagram from %s (%s)\n", 
 	   hostp->h_name, hostaddrp);
-    printf("server received %d/%d bytes: %s\n", strlen(buf), n, buf);
+    printf("server received %d/%d bytes: %s\n", (int) strlen(buf), n, buf);
 
     sscanf(buf, "%9s ", type);
 
     if (!strcmp("get", type)) {
-        printf("get\n");
+      sscanf(buf, "%*s %s ", type);
+      file = fopen(type, "rb");
+      if (file) {
+          if (fseek(file, 0, SEEK_END)) {
+              error("Failed to SEEK_END");
+          } else {   
+              filesize = ftell(file);
+              rewind(file);
+              sendto(sockfd, &filesize, sizeof(filesize), 0, (struct sockaddr *) &clientaddr, clientlen);
+              printf("Sending file %s (%ld bytes)\n", type, filesize);
+              bytes_sent = 0;
+              while (bytes_sent < filesize) {
+                  bzero(buf, BUFSIZE);
+                  bytes_read = fread(buf, 1, BUFSIZE, file);
+                  n = sendto(sockfd, buf, bytes_read, 0, (struct sockaddr *) &clientaddr, clientlen);
+                  if (n < 0) {
+                      error("SendAll FAILED");
+                  }
+                  bytes_sent += n;
+                  printf("sent %d bytes\n", n);
+              }
+          }
+          fclose(file);
+          bzero(buf, BUFSIZE);
+      } else {
+          error("File failed to open");
+      }
     } else if (!strcmp("put", type)) {
-        printf("put\n");
-    } else if (!strcmp("delte", type)) {
-        printf("delete\n");
+      n = recvfrom(sockfd, &filesize, sizeof(filesize), 0,
+        (struct sockaddr *) &clientaddr, &clientlen);  
+      sscanf(buf, "%*s %s", filename);
+      file = fopen(filename, "wb");
+      if (file) {
+        bytes_written = 0;
+        while (bytes_written < filesize) {
+          n = recvfrom(sockfd, buf, BUFSIZE, 0, (struct sockaddr *) &clientaddr, &clientlen);
+          if (n < 0) {
+            error("RECVFROM failed");
+          }
+          printf("Received %d bytes\n", n);
+          bytes_written += fwrite(buf, 1, n, file);
+        }
+        fclose(file);
+        snprintf(buf, BUFSIZE, "File %s sent successfully", filename);
+        n = sendAllTo(sockfd, buf, strlen(buf), 0, &clientaddr, clientlen);
+        if (n < 0) {
+          error("ERROR in sendto");
+        }
+      } else {
+        error("File failed to open");
+      }
+    } else if (!strcmp("delete", type)) {
+        sscanf(buf, "%*s %s ", type);
+        
+        if (remove(type)) {
+          snprintf(buf, BUFSIZE, "The file %s failed to delete\n", type);
+        } else {
+          snprintf(buf, BUFSIZE, "The file %s was deleted\n", type);
+        }
+        n = sendto(sockfd, buf, strlen(buf), 0, (struct sockaddr *) &clientaddr, clientlen);
+        if (n < 0) {
+          error("ERROR in sendto");
+        }
     } else if (!strcmp("ls", type)) {
         char * lsBody;
         int curLen = BUFSIZE, pos = 0;
@@ -160,7 +219,6 @@ int main(int argc, char **argv) {
 
         free(lsBody);
     } else if (!strcmp("exit", type)) {
-        char * msg = "QUIT SERVER";
         printf("Exiting from server...\n");
         close(sockfd);
         break;

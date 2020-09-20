@@ -39,12 +39,15 @@ int sendAllTo(int sockfd, char *buf, int buf_len, int flags, struct sockaddr_in 
 }
 
 int main(int argc, char **argv) {
-    int sockfd, portno, n;
+    int sockfd, portno, n, bytes_sent, bytes_read, bytes_written;
+    long size;
     int serverlen;
     struct sockaddr_in serveraddr;
     struct hostent *server;
     char *hostname;
-    char buf[BUFSIZE], parsed_command[10];
+    char buf[BUFSIZE], parsed_command[10], secondary_parse[255];
+    FILE *file;
+
     /* check command line arguments */
     if (argc != 3) {
        fprintf(stderr,"usage: %s <hostname> <port>\n", argv[0]);
@@ -81,28 +84,71 @@ int main(int argc, char **argv) {
 
         sscanf(buf, "%s ", parsed_command);
         // /* send the message to the server */
-        n = sendAllTo(sockfd, buf, strlen(buf), 0, &serveraddr, serverlen);
-        if (n < 0) {
-            error("Error in sendAllTo");
+        if (strcmp("put", parsed_command)) {
+            n = sendAllTo(sockfd, buf, strlen(buf), 0, &serveraddr, serverlen);
+            if (n < 0) {
+                error("Error in sendAllTo");
+            }
         }
         if (!strcmp("get", parsed_command)) {
+            n = recvfrom(sockfd, &size, sizeof(size), 0,
+                (struct sockaddr *) &serveraddr, &serverlen);  
+            sscanf(buf, "%*s %s", secondary_parse);
+            file = fopen(secondary_parse, "wb");
+            if (file) {
+                bytes_written = 0;
+                while (bytes_written < size) {
+                    n = recvfrom(sockfd, buf, BUFSIZE, 0, (struct sockaddr *) &serveraddr, &serverlen);
+                    if (n < 0) {
+                        error("RECVFROM failed");
+                    }
+                    bytes_written += fwrite(buf, 1, n, file);
+                }
+                fclose(file);
+                printf("File received\n");
+            } else {
+                error("File failed to open");
+            }
         } else if (!strcmp("put", parsed_command)) {
-        } else if (!strcmp("delete", parsed_command)) {
-        } else if (!strcmp("ls", parsed_command)) {
-            n = recvfrom(sockfd, buf, BUFSIZE, 0, &serveraddr, &serverlen);
-            printf("Received %d bytes\n", strlen(buf));
-            if (n < 0) error("ERROR in recvfrom");
-            printf("Received message from server:\n%s\n", buf);
+            sscanf(buf, "%*s %s ", secondary_parse);
+            file = fopen(secondary_parse, "rb");
+            if (file) {
+                if (fseek(file, 0, SEEK_END)) {
+                    error("Failed to SEEK_END");
+                } else {   
+                    size = ftell(file);
+                    rewind(file);
+                    sendAllTo(sockfd, buf, strlen(buf), 0, &serveraddr, serverlen);
+                    sendto(sockfd, &size, sizeof(size), 0, (struct sockaddr *) &serveraddr, serverlen);
+                    printf("Sending file %s (%ld bytes)\n", secondary_parse, size);
+                    bytes_sent = 0;
+                    while (bytes_sent < size) {
+                        bzero(buf, BUFSIZE);
+                        bytes_read = fread(buf, 1, BUFSIZE, file);
+                        n = sendto(sockfd, buf, bytes_read, 0, (struct sockaddr *) &serveraddr, serverlen);
+                        if (n < 0) {
+                            error("SendAll FAILED");
+                        }
+                        bytes_sent += n;
+                    }
+                }
+                fclose(file);
+                bzero(buf, BUFSIZE);
+            } else {
+                error("File failed to open");
+            }
         } else if (!strcmp("exit", parsed_command)) {
             printf("Good bye!\n");
             close(sockfd);
             break;
-        } else {
-            n = recvfrom(sockfd, buf, BUFSIZE, 0, &serveraddr, &serverlen);
+        }
+        
+        /* Default Recieve Value */
+        if (strcmp("get", parsed_command)) {
+            n = recvfrom(sockfd, buf, BUFSIZE, 0, (struct sockaddr *) &serveraddr, &serverlen);
             if (n < 0) error("ERROR in recvfrom");
             printf("Received message from server:\n%s\n", buf);
         }
-        /* print the server's reply */
 
     }
     return 0;
