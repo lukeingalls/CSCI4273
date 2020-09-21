@@ -79,11 +79,12 @@ int main(int argc, char **argv) {
     while (1) {
         /* get a message from the user */
         bzero(buf, BUFSIZE); //reset the buffer
+        size = 0; // resets check for empty files
         printf("Command: ");
         fgets(buf, BUFSIZE, stdin);
 
         sscanf(buf, "%s ", parsed_command);
-        // /* send the message to the server */
+        // /* send the message to the server EXCEPT FOR PUT*/
         if (strcmp("put", parsed_command)) {
             n = sendAllTo(sockfd, buf, strlen(buf), 0, &serveraddr, serverlen);
             if (n < 0) {
@@ -91,36 +92,48 @@ int main(int argc, char **argv) {
             }
         }
         if (!strcmp("get", parsed_command)) {
+            /* This functions the same as the server's put function */
+            // Receive file size
             n = recvfrom(sockfd, &size, sizeof(size), 0,
                 (struct sockaddr *) &serveraddr, &serverlen);  
-            sscanf(buf, "%*s %s", secondary_parse);
-            file = fopen(secondary_parse, "wb");
-            if (file) {
-                bytes_written = 0;
-                while (bytes_written < size) {
-                    n = recvfrom(sockfd, buf, BUFSIZE, 0, (struct sockaddr *) &serveraddr, &serverlen);
-                    if (n < 0) {
-                        error("RECVFROM failed");
+            if (size >= 0) {  
+                sscanf(buf, "%*s %s", secondary_parse);
+                file = fopen(secondary_parse, "wb");
+                if (file) {
+                    bytes_written = 0;
+                    // Ensure that we are receiveing expected size
+                    while (bytes_written < size) {
+                        n = recvfrom(sockfd, buf, BUFSIZE, 0, (struct sockaddr *) &serveraddr, &serverlen);
+                        if (n < 0) {
+                            error("RECVFROM failed");
+                        }
+                        bytes_written += fwrite(buf, 1, n, file);
                     }
-                    bytes_written += fwrite(buf, 1, n, file);
+                    fclose(file);
+                    printf("File received\n");
+                } else {
+                    error("File failed to open");
                 }
-                fclose(file);
-                printf("File received\n");
             } else {
-                error("File failed to open");
+                fprintf(stderr, "No such file exists!\n");
             }
         } else if (!strcmp("put", parsed_command)) {
+            /* This functions the same as the server's get function */
             sscanf(buf, "%*s %s ", secondary_parse);
             file = fopen(secondary_parse, "rb");
             if (file) {
+                // get size of teh file
                 if (fseek(file, 0, SEEK_END)) {
                     error("Failed to SEEK_END");
                 } else {   
                     size = ftell(file);
                     rewind(file);
+                    // tell server this is a put and the file name
                     sendAllTo(sockfd, buf, strlen(buf), 0, &serveraddr, serverlen);
+                    // tell server file size
                     sendto(sockfd, &size, sizeof(size), 0, (struct sockaddr *) &serveraddr, serverlen);
                     printf("Sending file %s (%ld bytes)\n", secondary_parse, size);
+                    // ensure we are sending all bytes that are read (and no excess)
                     bytes_sent = 0;
                     while (bytes_sent < size) {
                         bzero(buf, BUFSIZE);
@@ -135,7 +148,8 @@ int main(int argc, char **argv) {
                 fclose(file);
                 bzero(buf, BUFSIZE);
             } else {
-                error("File failed to open");
+                fprintf(stderr, "File failed to open! Please try another!");
+                size = -1;
             }
         } else if (!strcmp("exit", parsed_command)) {
             printf("Good bye!\n");
@@ -143,8 +157,8 @@ int main(int argc, char **argv) {
             break;
         }
         
-        /* Default Recieve Value */
-        if (strcmp("get", parsed_command)) {
+        /* Default Recieve Value EXCEPT FOR GET */
+        if (strcmp("get", parsed_command) && size >= 0) {
             n = recvfrom(sockfd, buf, BUFSIZE, 0, (struct sockaddr *) &serveraddr, &serverlen);
             if (n < 0) error("ERROR in recvfrom");
             printf("Received message from server:\n%s\n", buf);
