@@ -164,15 +164,14 @@ Request *parse_request(char * buf, const int buf_lim) {
  * create_response - takes in a request structure and returns the
  * appropriate response in a c string
  */
-char * create_response(Request *req) {
+char * create_response_header(Request *req) {
     char * buf;
     int file_size = 0;
     char http_version[HTTP_FIELD];
     char status_code[CODE_LEN];
     char content_message[CONTENT_LEN];
     char content_type[CONTENT_TYPE + FILE_EXT];
-    char content_length[CONTENT_LEN]; 
-    char *file_contents, *temp, c;
+    char content_length[CONTENT_LEN];
 
     if (req->fptr) {
         /*
@@ -181,16 +180,6 @@ char * create_response(Request *req) {
         fseek(req->fptr, 0L, SEEK_END);
         file_size = ftell(req->fptr);
         rewind(req->fptr);
-        /*
-         * Read contents of file into file_contents
-         */
-        file_contents = (char *) malloc((file_size + 2) * sizeof(char));
-        temp = file_contents;
-        while ((c = fgetc(req->fptr)) != EOF) {
-            *temp = c;
-            temp++;
-        }
-        *temp = '\0';
     }
 
     strcpy(http_version, (req->version) ? "HTTP/1.1 " : "HTTP/1.0 "); // define http_version
@@ -205,20 +194,18 @@ char * create_response(Request *req) {
             strlen(status_code) + 
             strlen(content_message) + 
             strlen(content_type) + 
-            strlen(content_length) + 
-            strlen((req->fptr) ? file_contents : "") +
-            3 /* Additional return, endline, and null terminator */
+            strlen(content_length)
         ) * sizeof(char));
 
     if (req->fptr) {
-        sprintf(buf, "%s%s%s%s%s%s\r\n", 
+        sprintf(buf, "%s%s%s%s%s", 
                         http_version, 
                         status_code, 
                         content_message, 
                         content_type, 
-                        content_length, 
-                        file_contents
+                        content_length
                 );
+        
     } else {
         sprintf(buf, "%s%s%s", 
                         http_version,
@@ -227,7 +214,6 @@ char * create_response(Request *req) {
                 );
     }
 
-    if (req->fptr) free(file_contents);
     return buf;
 }
 
@@ -235,9 +221,9 @@ char * create_response(Request *req) {
  * handle_request - read and handle_request text lines until client closes connection
  */
 void handle_request(int connfd) {
-    size_t n; 
+    size_t n;
     char request_buffer[MAXLINE];
-    char *httpmsg;
+    char *http_message_head;
     
     // Read the request
     n = read(connfd, request_buffer, MAXLINE);
@@ -245,15 +231,25 @@ void handle_request(int connfd) {
         printf("server received the following request:\n%s\n",request_buffer);
         Request *request = parse_request(request_buffer, MAXLINE);
 
-        // Construct the appropriate response
-        httpmsg = create_response(request);
+        // Construct the appropriate response header
+        http_message_head = create_response_header(request);
         
-        strcpy(request_buffer,httpmsg);
+        strcpy(request_buffer,http_message_head);
         printf("server returning a http message with the following content.\n%s\n",request_buffer);
-        write(connfd, request_buffer, strlen(httpmsg));
-        
+        write(connfd, request_buffer, strlen(http_message_head));
+
+        /*
+         * Read the file and write it to the socket
+         */
+        if (request->fptr) {
+            do {
+                n = fread(request_buffer, 1, MAXLINE, request->fptr);
+                write(connfd, request_buffer, n);
+            } while (n == MAXLINE);
+        }
+
         free(request);
-        free(httpmsg);
+        free(http_message_head);
     } else { // Nothing read from socket: CLOSED
         printf("The socket has been closed.\n");
     }
