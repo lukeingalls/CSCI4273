@@ -94,7 +94,7 @@ Request *parse_request(char * buf, const int buf_lim) {
     Request *request = (Request *) malloc(sizeof(Request));
     char parse_variable[MAXLINE];
     char ftype[FILE_EXT];
-    int file_name_length;
+    int file_name_length, i;
     /*
      * Define the type of the request. If a type is not found
      * then set it to GET
@@ -124,13 +124,16 @@ Request *parse_request(char * buf, const int buf_lim) {
 
         // Retieve file type
         file_name_length = strlen(parse_variable);
-        for (int i = file_name_length - 1; i >= 0; i--) {
-            if (parse_variable[file_name_length] == '.') {
+        for (i = file_name_length - 1; i >= 0; i--) {
+            fprintf(stderr, "%c\n", parse_variable[i]);
+            if (parse_variable[i] == '.') {
                 break;
             }
         }
+
+        fprintf(stderr, "%s\n", parse_variable + i + 1);
         
-        strcpy(ftype, parse_variable + file_name_length + 1);
+        strcpy(ftype, parse_variable + i + 1);
 
         if (strlen(ftype)) {
             if (!strcmp(ftype, "html") || !strcmp(ftype, "html")) {
@@ -197,7 +200,7 @@ Request *parse_request(char * buf, const int buf_lim) {
  */
 char * create_response_header(Request *req) {
     char * buf;
-    int file_size = 0;
+    int file_size = 0, buf_size;
     char http_version[HTTP_FIELD];
     char status_code[CODE_LEN];
     char content_message[CONTENT_LEN];
@@ -238,14 +241,15 @@ char * create_response_header(Request *req) {
         strcpy(content_message, "Internal Server Error\r\n");
     }
 
-    buf = (char *) malloc(
-        (
-            strlen(http_version) + 
-            strlen(status_code) + 
-            strlen(content_message) + 
-            strlen(content_type) + 
-            strlen(content_length)
-        ) * sizeof(char));
+    buf_size = strlen(http_version) + 
+                strlen(status_code) +
+                strlen(content_message) + 
+                strlen(content_type) + 
+                strlen(content_length);
+
+    buf = (char *) malloc((buf_size) * sizeof(char));
+
+    memset(buf, '\0', buf_size);
 
     if (req->fptr && req->type != ERROR) {
         sprintf(buf, "%s%s%s%s%s", 
@@ -276,6 +280,8 @@ void handle_request(int connfd) {
     char request_buffer[MAXLINE];
     char *http_message_head;
     
+    memset(request_buffer, '\0', MAXLINE);
+
     // Read the request
     n = read(connfd, request_buffer, MAXLINE);
     if (n) { // Content received from socket
