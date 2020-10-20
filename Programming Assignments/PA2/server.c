@@ -24,16 +24,20 @@
 #define HTTP_FIELD 12   /* Length of http feild */
 #define CONTENT_LEN 30  /* Length of the message in header */
 #define CONTENT_TYPE 15 /* adds padding for the string 'content-type: ' */
+#define true 1
+#define false 0
 
 typedef struct Request {
     enum Type {
         GET = 0, 
         HEAD = 1, 
-        POST = 2
+        POST = 2,
+        ERROR = 3
     } type;
     FILE *fptr;
     char file_type[FILE_EXT];
-    int version;
+    char version;
+    int has_body;
 } Request;
 
 void catch_sigint(int signo);
@@ -97,12 +101,16 @@ Request *parse_request(char * buf, const int buf_lim) {
     sscanf(buf, "%s ", parse_variable);
     if (!strcmp(parse_variable, "GET")) {
         request->type = GET;
+        request->has_body = true;
     } else if (!strcmp(parse_variable, "POST")) {
         request->type = POST;
+        request->has_body = true;
     } else if (!strcmp(parse_variable, "HEAD")) {
         request->type = HEAD;
+        request->has_body = false;
     } else {
-        request->type = GET;
+        request->type = ERROR;
+        request->has_body = false;
     }
     /*
      * Get the path to the requested file and then open it
@@ -131,11 +139,12 @@ Request *parse_request(char * buf, const int buf_lim) {
             } else if (!strcmp(ftype, "js")) {
                 strcpy(request->file_type, "application/javascript");
             } else {
+                fprintf(stderr, "ERROR: %s has unrecognized file type\n", parse_variable);
                 strcpy(request->file_type, "");
             }
         } else {
             fprintf(stderr, "ERROR: %s has no file type\n", parse_variable);
-            strcpy(request->file_type, "text/html");
+            strcpy(request->file_type, "");
         }
     } else { // Default file path
         DIR *root;
@@ -154,6 +163,7 @@ Request *parse_request(char * buf, const int buf_lim) {
             }
         } else {
             request->fptr = 0;
+            request->has_body = false;
         }
     }
     /*
@@ -161,7 +171,13 @@ Request *parse_request(char * buf, const int buf_lim) {
      * decimal point that is being set.
      */
     sscanf(buf, "%*s %*s %s ", parse_variable);
-    request->version = parse_variable[2] == '1';
+    if (strlen(parse_variable) == 0) {
+        request->version = '\0';
+        request->has_body = false;
+        request->type = ERROR;
+    } else {
+        request->version = parse_variable[2];
+    }
 
     return request;
 }
@@ -188,11 +204,30 @@ char * create_response_header(Request *req) {
         rewind(req->fptr);
     }
 
-    strcpy(http_version, (req->version) ? "HTTP/1.1 " : "HTTP/1.0 "); // define http_version
-    strcpy(status_code, (req->fptr) ? "200 " : "500 "); // define status_code
-    strcpy(content_message, (req->fptr) ? "Document Follows\r\n" : "Internal Server Error\r\n");  // define content_message
     snprintf(content_type, CONTENT_TYPE + FILE_EXT, "Content-Type:%s\r\n", req->file_type); // define the content_type
     snprintf(content_length, CONTENT_LEN, "Content-Length:%d\r\n\r\n", file_size); // define the content_length
+    
+    // Define http version type
+    if (req->version == '1' || req->version == '0') {
+        strcpy(http_version, "HTTP/1.1 ");
+    } else {
+        strcpy(http_version, "HTTP/1.0 ");
+    }
+
+    // Define the status_code and message fields
+    if (req->fptr && req->type != ERROR) { // Valid file and request method
+        strcpy(status_code, "200 ");
+        strcpy(content_message, "Document Follows\r\n");
+    } else if (req->fptr) { // Invalid request method
+        strcpy(status_code, "400 ");
+        strcpy(content_message, "Bad Request\r\n");
+    } else if (req->type != ERROR) { // Invalid file
+        strcpy(status_code, "404 ");
+        strcpy(content_message, "Not Found\r\n");
+    } else {
+        strcpy(status_code, "500 ");
+        strcpy(content_message, "Internal Server Error\r\n");
+    }
 
     buf = (char *) malloc(
         (
@@ -203,7 +238,7 @@ char * create_response_header(Request *req) {
             strlen(content_length)
         ) * sizeof(char));
 
-    if (req->fptr) {
+    if (req->fptr && req->type != ERROR) {
         sprintf(buf, "%s%s%s%s%s", 
                         http_version, 
                         status_code, 
@@ -211,9 +246,10 @@ char * create_response_header(Request *req) {
                         content_type, 
                         content_length
                 );
-        
+    } else if (!strcmp(status_code, "404 ")) {
+        sprintf(buf, "HTTP/1.1 404 File Not Found\r\n\r\n<h1>Page doesn't exist</h1>\r\n");
     } else {
-        sprintf(buf, "%s%s%s", 
+        sprintf(buf, "%s%s%s\r\n", 
                         http_version,
                         status_code,
                         content_message
@@ -247,7 +283,7 @@ void handle_request(int connfd) {
         /*
          * Read the file and write it to the socket
          */
-        if (request->fptr) {
+        if (request->fptr && request->has_body) {
             do {
                 n = fread(request_buffer, 1, MAXLINE, request->fptr);
                 write(connfd, request_buffer, n);
