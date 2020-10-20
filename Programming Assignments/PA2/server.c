@@ -94,6 +94,7 @@ Request *parse_request(char * buf, const int buf_lim) {
     Request *request = (Request *) malloc(sizeof(Request));
     char parse_variable[MAXLINE];
     char ftype[FILE_EXT];
+    int file_name_length;
     /*
      * Define the type of the request. If a type is not found
      * then set it to GET
@@ -120,9 +121,17 @@ Request *parse_request(char * buf, const int buf_lim) {
     if (strcmp(parse_variable, "/")) { // We have the filepath
         request->fptr = fopen(parse_variable + 1, "rb");
 
+
         // Retieve file type
-        sscanf(parse_variable, "%*[^.]%*c%s", ftype);
+        file_name_length = strlen(parse_variable);
+        for (int i = file_name_length - 1; i >= 0; i--) {
+            if (parse_variable[file_name_length] == '.') {
+                break;
+            }
+        }
         
+        strcpy(ftype, parse_variable + file_name_length + 1);
+
         if (strlen(ftype)) {
             if (!strcmp(ftype, "html") || !strcmp(ftype, "html")) {
                 strcpy(request->file_type, "text/html");
