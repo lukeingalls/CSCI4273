@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <signal.h>
 #include <strings.h>
 #include <sys/socket.h>
 #include <sys/types.h>
@@ -35,7 +36,7 @@ typedef struct Request {
     int version;
 } Request;
 
-
+void catch_sigint(int signo);
 int open_listenfd(int port);
 void handle_request(int connfd);
 void *thread(void *vargp);
@@ -47,6 +48,13 @@ int main(int argc, char ** argv) {
     struct sockaddr_in clientaddr;
     pthread_t tid;
 
+    // Register signal handler
+    if (signal(SIGINT, catch_sigint) == SIG_ERR) {
+        fprintf(stderr, "Signal handler could not be registered");
+        exit(2);
+    }
+
+    // Check that a port number has been received
     if (argc != 2) {
         fprintf(stderr, "Usage: %s <port>\n", argv[0]);
         exit(1);
@@ -126,11 +134,9 @@ Request *parse_request(char * buf, const int buf_lim) {
                 strcpy(request->file_type, "");
             }
         } else {
-            fprintf(stderr, "ERROR: %s has no file type", parse_variable);
+            fprintf(stderr, "ERROR: %s has no file type\n", parse_variable);
             strcpy(request->file_type, "text/html");
         }
-
-
     } else { // Default file path
         DIR *root;
         struct dirent *entry;
@@ -287,3 +293,12 @@ int open_listenfd(int port)
         return -1;
     return listenfd;
 } /* end open_listenfd */
+
+/*
+ * catch_sigint - function to help the program terminate gracefully in the event of 
+ * sigint
+ */
+void catch_sigint(int signo) {
+    fprintf(stderr, "\nShut down initiated. Good bye.\n");
+    exit(0);
+}
