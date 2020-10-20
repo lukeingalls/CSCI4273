@@ -87,7 +87,7 @@ void * thread(void * vargp)
  * parses it into the request structure
  */
 Request *parse_request(char * buf, const int buf_lim) {
-    Request *request = (Request *) malloc(sizeof(request));
+    Request *request = (Request *) malloc(sizeof(Request));
     char parse_variable[MAXLINE];
     char ftype[FILE_EXT];
     /*
