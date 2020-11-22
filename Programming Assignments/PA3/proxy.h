@@ -31,6 +31,7 @@ typedef struct Request {
     int port;
     struct hostent *host;
     struct sockaddr_in addr;
+    int blacklist;
 } Request;
 
 typedef struct Response {
@@ -49,3 +50,12 @@ typedef struct CachePage {
     Response *response;
     char * page;
 } CachePage;
+
+typedef struct DNS {
+    char domain[LINE_LEN];
+    struct hostent *h;
+} DNS;
+
+typedef struct Blacklist {
+    char identifier[LINE_LEN];
+} Blacklist;

@@ -4,9 +4,14 @@
 #include "proxy.h"
 
 // Socket listening for connections
-int listenfd;
+int listenfd, dns_items = 0, blacklist_items = 0;
 Cache * cache = 0;
 int ttl;
+pthread_mutex_t cache_lock;
+pthread_mutex_t dns_lock;
+
+DNS dns[100];
+Blacklist blacklist[100];
 
 void catch_sigint(int signo);
 void catch_sigpipe(int signo);
@@ -23,6 +28,8 @@ void dealloc_cache_frame(Cache *frame);
 void cache_ttl();
 void remove_page(Cache *c);
 void rm_node(Cache *frame);
+struct hostent * host_is_cached(char * addr);
+void populate_blacklist();
 
 int main(int argc, char ** argv) {
     int port, *connfdp;
@@ -30,14 +37,18 @@ int main(int argc, char ** argv) {
     struct sockaddr_in clientaddr;
     pthread_t tid;
 
+    populate_blacklist();
+
     // Register signal handler
-    if (signal(SIGINT, catch_sigint) == SIG_ERR) {
+    if (signal(SIGINT, catch_sigint) == SIG_ERR || signal(SIGPIPE, catch_sigpipe) == SIG_ERR) {
         fprintf(stderr, "Signal handler could not be registered");
         exit(2);
     }
 
-    signal(SIGPIPE, catch_sigpipe);
-
+    if (pthread_mutex_init(&cache_lock, NULL) != 0 && pthread_mutex_init(&dns_lock, NULL) != 0) { 
+        printf("\n mutex init has failed\n"); 
+        return 1; 
+    } 
     // Check that a port number has been received
     if (argc != 3) {
         fprintf(stderr, "Usage: %s <port> <cache-ttl>\n", argv[0]);
@@ -73,7 +84,7 @@ void * thread(void * vargp)
  */
 Request *parse_request(char * buf, const int buf_lim) {
     Request *request = (Request *) malloc(sizeof(Request));
-
+    request->blacklist = false;
     // Get the type of the request
     sscanf(buf, "%3s", request->reqtype);
 
@@ -103,7 +114,21 @@ Request *parse_request(char * buf, const int buf_lim) {
             }
         }
 
-        request->host = gethostbyname(query_addr);
+        if (!(request->host = host_is_cached(query_addr))) {
+            request->host = gethostbyname(query_addr);
+            pthread_mutex_lock(&dns_lock);
+            if (dns_items < 100) {
+                dns[dns_items++].h = request->host;
+            }
+            pthread_mutex_unlock(&dns_lock);
+        }
+
+        for (int i = 0; i < blacklist_items; i++) {
+            char * ip = inet_ntoa(*((struct in_addr*) request->host->h_addr_list[0])); 
+            if (!strcmp(query_addr, blacklist[i].identifier) || !strcmp(ip, blacklist[i].identifier)) {
+                request->blacklist = true;
+            }
+        }
 
         // Define the sockaddr
         if(request->host) {
@@ -204,6 +229,14 @@ void transfer_400(int connfd) {
 }
 
 /*
+ * transfer_403 - sends a 403 message to @param connfd
+ */
+void transfer_403(int connfd) {
+    char * msg = "HTTP/1.0 403 Forbidden\r\n\r\n<h1>You are forbidden from visiting this site</h1>\r\n\r\n";
+    write(connfd, msg, strlen(msg));
+}
+
+/*
  * transfer_404 - sends a 404 message to @param connfd
  */
 void transfer_404(int connfd) {
@@ -229,27 +262,30 @@ void handle_request(int connfd) {
     if (recieved) { // Content received from socket
         Request *request = parse_request(request_buffer, MAXBUF);
         if (request->host) {
-            conn_ext_fd = socket(AF_INET, SOCK_STREAM, 0);
-            if (conn_ext_fd == -1) {
-                fprintf(stderr, "error opening external socket");
-            } else if (!connect(conn_ext_fd, (struct sockaddr *) &(request->addr), sizeof(request->addr))) {
-                if (strcmp(request->reqtype, "GET")) {
-                    transfer_400(connfd);
-                } else {
-                    sscanf(request_buffer, "%255[^\n]", line);;
-                    SHA1((unsigned char *) line, strlen(line), hash);
-                    Cache * c = check_cache(hash);
-                    if (!c) {
-                        c = new_cache(hash);
-                        transfer_get(request_buffer, conn_ext_fd, connfd, recieved, c);
+            if (!request->blacklist) {
+                conn_ext_fd = socket(AF_INET, SOCK_STREAM, 0);
+                if (conn_ext_fd == -1) {
+                    fprintf(stderr, "error opening external socket");
+                } else if (!connect(conn_ext_fd, (struct sockaddr *) &(request->addr), sizeof(request->addr))) {
+                    if (strcmp(request->reqtype, "GET")) {
+                        transfer_400(connfd);
                     } else {
-                        serve_from_cache(c->page, connfd);
-                        fprintf(stderr, "Served cached page for request: %s\n", line);
+                        sscanf(request_buffer, "%255[^\n]", line);;
+                        SHA1((unsigned char *) line, strlen(line), hash);
+                        Cache * c = check_cache(hash);
+                        if (!c) {
+                            c = new_cache(hash);
+                            transfer_get(request_buffer, conn_ext_fd, connfd, recieved, c);
+                        } else {
+                            serve_from_cache(c->page, connfd);
+                            fprintf(stderr, "Served cached page for request: %s\n", line);
+                        }
                     }
-
+                } else {
+                    fprintf(stderr, "Failed to connect to external address");
                 }
             } else {
-                fprintf(stderr, "Failed to connect to external address");
+                transfer_403(connfd);
             }
         } else {
             transfer_404(connfd);
@@ -303,6 +339,8 @@ void catch_sigint(int signo) {
     fprintf(stderr, "\nShut down initiated. Good bye.\n");
     close(listenfd);
     dealloc_cache();
+    pthread_mutex_destroy(&cache_lock);
+    pthread_mutex_destroy(&dns_lock);
     exit(0);
 }
 
@@ -343,7 +381,7 @@ CachePage *init_page(Response *response) {
  */
 Cache *check_cache(unsigned char hash[SHA_DIGEST_LENGTH]) {
     Cache * c_iter = cache;
-
+    pthread_mutex_lock(&cache_lock);
     while (c_iter) {
         if (!memcmp(c_iter->hash, hash, SHA_DIGEST_LENGTH)) {
             break;
@@ -351,6 +389,7 @@ Cache *check_cache(unsigned char hash[SHA_DIGEST_LENGTH]) {
             c_iter = c_iter->next;
         }
     }
+    pthread_mutex_unlock(&cache_lock);
 
     return c_iter;
 }
@@ -362,14 +401,13 @@ void write_page_content(CachePage *cp, size_t pos, char * buf, size_t write_amou
     memcpy(cp->page + pos, buf, write_amount);
 }
 
-
 /*
  * cache_ttl - validates that pages in the cache have not exceeded their ttl
  */
 void cache_ttl() {
     Cache * c_iter = cache;
     Cache * temp;
-
+    pthread_mutex_lock(&cache_lock);
     while (c_iter) {
         if (c_iter->ttl + 15 < time(0)) {
             temp = c_iter;
@@ -379,6 +417,7 @@ void cache_ttl() {
             c_iter = c_iter->next;
         }
     }
+    pthread_mutex_unlock(&cache_lock);
 }
 
 /*
@@ -423,4 +462,36 @@ void dealloc_cache_frame(Cache *frame) {
     }
 
     rm_node(frame);
+}
+
+struct hostent * host_is_cached(char * addr) {
+    for (int i = 0; i < dns_items; i++) {
+        if (!strcmp(dns[i].domain, addr)) {
+            return dns[i].h;
+        }
+    }
+    return 0;
+}
+
+void populate_blacklist() {
+    FILE *file;
+    file = fopen("blacklist.txt", "r");
+
+    char * c = blacklist[blacklist_items].identifier;
+
+    if (file) {
+        while(fread(c, 1, 1, file)) {
+            if (*c == '\n') {
+                *c = '\0';
+                blacklist_items++;
+                c = blacklist[blacklist_items].identifier;
+            } else {
+                c++;
+            }
+
+            if (blacklist_items == 100) break;
+        }
+    }
+
+    fclose(file);
 }
