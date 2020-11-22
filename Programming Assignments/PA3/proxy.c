@@ -5,6 +5,7 @@
 
 // Socket listening for connections
 int listenfd;
+Cache * cache = 0;
 
 void catch_sigint(int signo);
 void catch_sigpipe(int signo);
@@ -12,6 +13,12 @@ int open_listenfd(int port);
 void handle_request(int connfd);
 void *thread(void *vargp);
 Request *parse_request(char * buf, const int buf_lim);
+Cache *new_cache();
+CachePage *init_page(unsigned char * buf, size_t buf_len, size_t resp_len);
+Cache *check_cache(unsigned char hash[SHA_DIGEST_LENGTH]);
+void write_page_content(CachePage *cp, size_t pos, char * buf);
+void dealloc_cache();
+void dealloc_cache_frame(Cache *frame);
 
 int main(int argc, char ** argv) {
     int port, *connfdp;
@@ -142,6 +149,10 @@ Response *parse_response(int connfd) {
     return response;
 }
 
+/*
+ * transfer_get - handles the exchange of messages between the 
+ * requester and the remote server.
+ */
 void transfer_get(char * request_buffer, int conn_ext_fd, int connfd, size_t recieved) {
     size_t sent, remainder;
     char * bufptr;
@@ -164,15 +175,22 @@ void transfer_get(char * request_buffer, int conn_ext_fd, int connfd, size_t rec
     free(response);
 }
 
+/*
+ * transfer_400 - sends a 400 message to @param connfd
+ */
 void transfer_400(int connfd) {
     char * msg = "HTTP/1.0 400 Bad Request\r\n\r\n";
     write(connfd, msg, strlen(msg));
 }
 
+/*
+ * transfer_404 - sends a 404 message to @param connfd
+ */
 void transfer_404(int connfd) {
     char * msg = "HTTP/1.0 404 Not Found\r\n\r\n<h1>The address could not be resolved</h1>\r\n\r\n";
     write(connfd, msg, strlen(msg));
 }
+
 /*
  * handle_request - read and handle_request text lines until client closes connection
  */
@@ -255,6 +273,7 @@ int open_listenfd(int port)
 void catch_sigint(int signo) {
     fprintf(stderr, "\nShut down initiated. Good bye.\n");
     close(listenfd);
+    dealloc_cache();
     exit(0);
 }
 
@@ -263,4 +282,72 @@ void catch_sigint(int signo) {
  */
 void catch_sigpipe(int signo) {
     pthread_exit(NULL);
+}
+
+/*
+ * Gets a new cache node and places it in the cache.
+ */ 
+Cache *new_cache()  {
+    Cache * c = (Cache *) malloc(sizeof(Cache));
+    c->next = cache;
+    return c;
+}
+
+/*
+ * init_page - populates all but the page field of a cache page
+ */
+CachePage *init_page(unsigned char * buf, size_t buf_len, size_t resp_len) {
+    CachePage *cp = (CachePage *) malloc(sizeof(CachePage));
+    SHA1(buf, buf_len, cp->hash);
+    
+    memcpy(cp->header, buf, buf_len);
+    cp->length = resp_len;
+
+    cp->page = (char *) malloc(resp_len * (sizeof(char)));
+
+    return cp;
+}
+
+/*
+ * check_cache - returns a reference to a cache matching the hash
+ * or null if no such page exists
+ */
+Cache *check_cache(unsigned char hash[SHA_DIGEST_LENGTH]) {
+    Cache * c_iter = cache;
+
+    while (c_iter) {
+        if (!memcmp(c_iter->page->hash, hash, SHA_DIGEST_LENGTH)) {
+            break;
+        } else {
+            c_iter = c_iter->next;
+        }
+    }
+
+    return c_iter;
+}
+
+/*
+ * write_page_contnent - places the page into the cache
+ */
+void write_page_content(CachePage *cp, size_t pos, char * buf) {
+    memcpy(cp->page + pos, buf, (cp->length - pos > MAXBUF) ? MAXBUF : cp->length - pos);
+}
+
+/*
+ * dealloc_cache - wrapper for the recursive dealloc_cache_frame
+ */
+void dealloc_cache() {
+    dealloc_cache_frame(cache);
+}
+
+/*
+ * dealloc_cache_frame - frees the entire cache
+ */
+void dealloc_cache_frame(Cache *frame) {
+    if (frame->next) {
+        dealloc_cache_frame(frame->next);
+    }
+    free(frame->page->page);
+    free(frame->page);
+    free(frame);
 }

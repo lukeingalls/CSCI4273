@@ -1,6 +1,6 @@
 CC=gcc
 EXE=webproxy
-CFLAGS=-Wall -pthread
+CFLAGS=-Wall -pthread -lcrypto
 PORT=5001
 
 all:

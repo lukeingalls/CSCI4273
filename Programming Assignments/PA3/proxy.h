@@ -4,6 +4,7 @@
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <netinet/in.h>
+#include <openssl/sha.h>
 #include <pthread.h>    /* pthread_create, pthread_detach */
 #include <stdio.h>
 #include <stdlib.h>
@@ -35,3 +36,15 @@ typedef struct Response {
     char header[MAXBUF / 2];
     size_t content_length;
 } Response;
+
+typedef struct Cache {
+    struct Cache *next;
+    struct CachePage *page;
+} Cache;
+
+typedef struct CachePage {
+    unsigned char hash[SHA_DIGEST_LENGTH];
+    char header[MAXBUF];
+    size_t length;
+    char * page;
+} CachePage;
