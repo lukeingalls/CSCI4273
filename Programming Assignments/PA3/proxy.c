@@ -105,59 +105,63 @@ Request *parse_request(char * buf, const int buf_lim) {
 
     // Get the http version
     sscanf(buf,"%*s %*s, %9s", request->webaddr); // TODO make formatter use macro
-
-    // Record the request
-    memcpy(request->reqcontent, buf, MAXBUF);
-
     return request;
 }
 
-
 /*
- * update_response_recv - maintains a counter
+ * parse_response - collects the header from a response
+ * from the remote server and parses the contentlength.
  */
+Response *parse_response(int connfd) {
+    Response *response = (Response *) malloc(sizeof(Response));
+    char line[LINE_LEN], c = '\0';
+    int idx = 0, response_idx = 0;
 
-int is_partial(char * buf) {
-    int status;
-    sscanf(buf, "%*s %d ", &status);
-    return status ==  206;
-}
-
-void print_packet_header(char * buf, const int buf_lim) {
-    if (*buf == 'H') {
-        for (char * c = buf; c < buf + buf_lim - 4; c++) {
-            if (
-                *c == '\r' &&
-                *(c+1) == '\n' &&
-                *(c+2) == '\r' &&
-                *(c+3) == '\n'
-                )
-            {
-                break;
+    while (idx < (MAXBUF / 2)) {
+        if (read(connfd, &c, 1) == 1) {
+            line[idx++] = c;
+            if (c == '\n') {
+                line[idx] = '\0';
+                strcpy(response->header + response_idx, line);
+                response_idx += idx;
+                idx = 0;
+                if (!strncmp(line, "Content-Length:", 15)) {
+                    sscanf(line, "%*s %lu", &response->content_length);
+                }
+                if (strlen(line) <= 2) {
+                    break;
+                }
             }
-            printf("%c", *c);
+        } else {
+            break;
         }
-        printf("\n");
     }
-}
 
+    fprintf(stderr, "The header is: %s\n", response->header);
+
+    return response;
+}
 
 void transfer_get(char * request_buffer, int conn_ext_fd, int connfd, size_t recieved) {
-    size_t sent;
+    size_t sent, remainder;
     char * bufptr;
-    
     bufptr = request_buffer;
     while ((sent = write(conn_ext_fd, bufptr, recieved))) {
         recieved -= sent;
         bufptr += sent;
     }
-    while ((recieved = read(conn_ext_fd, request_buffer, MAXBUF))) {
-        bufptr = request_buffer;
-        while((sent = write(connfd, bufptr, recieved))) {
-            bufptr += sent;
-            recieved -= sent;
-        }
+    Response * response = parse_response(conn_ext_fd);
+    // Write the header
+    sent = write(connfd, response->header, strlen(response->header));
+
+    remainder = response->content_length;
+    while (remainder) {
+        recieved = read(conn_ext_fd, request_buffer, (remainder > MAXBUF) ? MAXBUF : remainder);
+        sent = write(connfd, request_buffer, recieved);
+        remainder -= recieved;
     }
+
+    free(response);
 }
 
 void transfer_400(int connfd) {
@@ -184,7 +188,7 @@ void handle_request(int connfd) {
     if (!strncmp(request_buffer, "GET /ajax/libs/jquery/1.4/jquery.min.js undefined", 20)) {
         fprintf(stderr, "request issued");
     }
-    fprintf(stderr, "%s\n\n", request_buffer);
+    // fprintf(stderr, "%s\n\n", request_buffer);
     if (recieved) { // Content received from socket
         Request *request = parse_request(request_buffer, MAXBUF);
         if (request->host) {

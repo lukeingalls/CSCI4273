@@ -20,15 +20,18 @@
 #define false 0
 #define ADDR_LEN 256
 #define TYPELEN 4
-#define VERINFO 10
 #define CONTENT_LEN 100
+#define LINE_LEN 256
 
 typedef struct Request {
     char reqtype[TYPELEN];
     char webaddr[ADDR_LEN];
     int port;
-    char httpver[VERINFO];
-    char reqcontent[MAXBUF];
     struct hostent *host;
     struct sockaddr_in addr;
 } Request;
+
+typedef struct Response {
+    char header[MAXBUF / 2];
+    size_t content_length;
+} Response;
