@@ -13,6 +13,7 @@
 #include <strings.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <time.h>
 #include <unistd.h>
 
 #define MAXBUF  8192    /* max I/O buffer size */
@@ -41,6 +42,7 @@ typedef struct Cache {
     struct Cache *next;
     struct CachePage *page;
     unsigned char hash[SHA_DIGEST_LENGTH];
+    time_t ttl;
 } Cache;
 
 typedef struct CachePage {

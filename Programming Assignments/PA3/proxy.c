@@ -6,6 +6,7 @@
 // Socket listening for connections
 int listenfd;
 Cache * cache = 0;
+int ttl;
 
 void catch_sigint(int signo);
 void catch_sigpipe(int signo);
@@ -19,6 +20,9 @@ Cache *check_cache(unsigned char hash[SHA_DIGEST_LENGTH]);
 void write_page_content(CachePage *cp, size_t pos, char * buf, size_t write_amount);
 void dealloc_cache();
 void dealloc_cache_frame(Cache *frame);
+void cache_ttl();
+void remove_page(Cache *c);
+void rm_node(Cache *frame);
 
 int main(int argc, char ** argv) {
     int port, *connfdp;
@@ -35,11 +39,12 @@ int main(int argc, char ** argv) {
     signal(SIGPIPE, catch_sigpipe);
 
     // Check that a port number has been received
-    if (argc != 2) {
-        fprintf(stderr, "Usage: %s <port>\n", argv[0]);
+    if (argc != 3) {
+        fprintf(stderr, "Usage: %s <port> <cache-ttl>\n", argv[0]);
         exit(1);
     }
     port = atoi(argv[1]);
+    ttl = atoi(argv[2]);
 
     listenfd = open_listenfd(port);
     while (1) {
@@ -217,6 +222,7 @@ void handle_request(int connfd) {
     char request_buffer[MAXBUF];
     memset(request_buffer, '\0', MAXBUF);
 
+    cache_ttl();
 
     // Read the request
     recieved = read(connfd, request_buffer, MAXBUF);
@@ -314,6 +320,7 @@ Cache *new_cache(unsigned char * buf)  {
     Cache * c = (Cache *) malloc(sizeof(Cache));
     memcpy(c->hash, buf, SHA_DIGEST_LENGTH);
     c->next = cache;
+    c->ttl = time(0);
     cache = c;
     return c;
 }
@@ -355,6 +362,49 @@ void write_page_content(CachePage *cp, size_t pos, char * buf, size_t write_amou
     memcpy(cp->page + pos, buf, write_amount);
 }
 
+
+/*
+ * cache_ttl - validates that pages in the cache have not exceeded their ttl
+ */
+void cache_ttl() {
+    Cache * c_iter = cache;
+    Cache * temp;
+
+    while (c_iter) {
+        if (c_iter->ttl + 15 < time(0)) {
+            temp = c_iter;
+            c_iter = c_iter->next;
+            remove_page(temp);
+        } else {
+            c_iter = c_iter->next;
+        }
+    }
+}
+
+/*
+ * remove_page - removes a page from the cache
+ */
+void remove_page(Cache *c) {
+    Cache *c_iter = cache;
+
+    if (cache == c) {
+        cache = c -> next;
+        rm_node(c);
+    }
+
+    while (c_iter && c_iter->next != c) c_iter = c_iter->next;
+
+    c_iter->next = c->next;
+    rm_node(c);
+}
+
+void rm_node(Cache *frame) {
+    fprintf(stderr, "Removing node from cache\n");
+    if (frame->page->page) free(frame->page->page);
+    if (frame->page) free(frame->page);
+    if (frame) free(frame);
+}
+
 /*
  * dealloc_cache - wrapper for the recursive dealloc_cache_frame
  */
@@ -372,7 +422,5 @@ void dealloc_cache_frame(Cache *frame) {
         dealloc_cache_frame(frame->next);
     }
 
-    if (frame->page->page) free(frame->page->page);
-    if (frame->page) free(frame->page);
-    if (frame) free(frame);
+    rm_node(frame);
 }
