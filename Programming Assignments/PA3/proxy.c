@@ -14,7 +14,7 @@ void handle_request(int connfd);
 void *thread(void *vargp);
 Request *parse_request(char * buf, const int buf_lim);
 Cache *new_cache();
-CachePage *init_page(unsigned char * buf, size_t buf_len, size_t resp_len);
+CachePage *init_page(Response *response);
 Cache *check_cache(unsigned char hash[SHA_DIGEST_LENGTH]);
 void write_page_content(CachePage *cp, size_t pos, char * buf);
 void dealloc_cache();
@@ -144,8 +144,6 @@ Response *parse_response(int connfd) {
         }
     }
 
-    fprintf(stderr, "The header is: %s\n", response->header);
-
     return response;
 }
 
@@ -153,15 +151,22 @@ Response *parse_response(int connfd) {
  * transfer_get - handles the exchange of messages between the 
  * requester and the remote server.
  */
-void transfer_get(char * request_buffer, int conn_ext_fd, int connfd, size_t recieved) {
+void transfer_get(char * request_buffer, int conn_ext_fd, int connfd, size_t recieved, Cache *c) {
     size_t sent, remainder;
     char * bufptr;
     bufptr = request_buffer;
+    CachePage *cp = 0;
     while ((sent = write(conn_ext_fd, bufptr, recieved))) {
         recieved -= sent;
         bufptr += sent;
     }
     Response * response = parse_response(conn_ext_fd);
+
+    if (c) {
+        cp = init_page(response);
+        cache->page = cp;
+    }
+
     // Write the header
     sent = write(connfd, response->header, strlen(response->header));
 
@@ -197,15 +202,14 @@ void transfer_404(int connfd) {
 void handle_request(int connfd) {
     size_t recieved;
     int conn_ext_fd;
+    char line[256];
+    unsigned char hash[SHA_DIGEST_LENGTH];
     char request_buffer[MAXBUF];
     memset(request_buffer, '\0', MAXBUF);
 
 
     // Read the request
     recieved = read(connfd, request_buffer, MAXBUF);
-    if (!strncmp(request_buffer, "GET /ajax/libs/jquery/1.4/jquery.min.js undefined", 20)) {
-        fprintf(stderr, "request issued");
-    }
     // fprintf(stderr, "%s\n\n", request_buffer);
     if (recieved) { // Content received from socket
         Request *request = parse_request(request_buffer, MAXBUF);
@@ -217,7 +221,18 @@ void handle_request(int connfd) {
                 if (strcmp(request->reqtype, "GET")) {
                     transfer_400(connfd);
                 } else {
-                    transfer_get(request_buffer, conn_ext_fd, connfd, recieved);
+                    sscanf(request_buffer, "%255[^\n]", line);
+                    fprintf(stderr, "%s\n", line);
+                    SHA1((unsigned char *) line, strlen(line), hash);
+                    Cache * c = check_cache(hash);
+                    if (!c) {
+                        c = new_cache(hash);
+                    } else {
+                        fprintf(stderr, "cache hit");
+                        c = 0;
+                    }
+
+                    transfer_get(request_buffer, conn_ext_fd, connfd, recieved, c);
                 }
             } else {
                 fprintf(stderr, "Failed to connect to external address");
@@ -287,23 +302,22 @@ void catch_sigpipe(int signo) {
 /*
  * Gets a new cache node and places it in the cache.
  */ 
-Cache *new_cache()  {
+Cache *new_cache(unsigned char * buf)  {
     Cache * c = (Cache *) malloc(sizeof(Cache));
+    memcpy(c->hash, buf, SHA_DIGEST_LENGTH);
     c->next = cache;
+    cache = c;
     return c;
 }
 
 /*
  * init_page - populates all but the page field of a cache page
  */
-CachePage *init_page(unsigned char * buf, size_t buf_len, size_t resp_len) {
+CachePage *init_page(Response *response) {
     CachePage *cp = (CachePage *) malloc(sizeof(CachePage));
-    SHA1(buf, buf_len, cp->hash);
     
-    memcpy(cp->header, buf, buf_len);
-    cp->length = resp_len;
-
-    cp->page = (char *) malloc(resp_len * (sizeof(char)));
+    cp->response = response;
+    cp->page = (char *) malloc(response->content_length * (sizeof(char)));
 
     return cp;
 }
@@ -316,7 +330,7 @@ Cache *check_cache(unsigned char hash[SHA_DIGEST_LENGTH]) {
     Cache * c_iter = cache;
 
     while (c_iter) {
-        if (!memcmp(c_iter->page->hash, hash, SHA_DIGEST_LENGTH)) {
+        if (!memcmp(c_iter->hash, hash, SHA_DIGEST_LENGTH)) {
             break;
         } else {
             c_iter = c_iter->next;
@@ -330,14 +344,16 @@ Cache *check_cache(unsigned char hash[SHA_DIGEST_LENGTH]) {
  * write_page_contnent - places the page into the cache
  */
 void write_page_content(CachePage *cp, size_t pos, char * buf) {
-    memcpy(cp->page + pos, buf, (cp->length - pos > MAXBUF) ? MAXBUF : cp->length - pos);
+    memcpy(cp->page + pos, buf, (cp->response->content_length - pos > MAXBUF) ? MAXBUF : cp->response->content_length - pos);
 }
 
 /*
  * dealloc_cache - wrapper for the recursive dealloc_cache_frame
  */
 void dealloc_cache() {
-    dealloc_cache_frame(cache);
+    if (cache) {
+        dealloc_cache_frame(cache);
+    }
 }
 
 /*

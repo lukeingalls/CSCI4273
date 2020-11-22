@@ -40,11 +40,10 @@ typedef struct Response {
 typedef struct Cache {
     struct Cache *next;
     struct CachePage *page;
+    unsigned char hash[SHA_DIGEST_LENGTH];
 } Cache;
 
 typedef struct CachePage {
-    unsigned char hash[SHA_DIGEST_LENGTH];
-    char header[MAXBUF];
-    size_t length;
+    Response *response;
     char * page;
 } CachePage;
