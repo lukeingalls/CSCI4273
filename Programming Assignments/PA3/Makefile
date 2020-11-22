@@ -8,3 +8,6 @@ all:
 
 webproxy:
 	$(CC) proxy.c $(CFLAGS) -o $(EXE) && ./$(EXE) $(PORT) &
+
+debug:
+	$(CC) proxy.c -g $(CFLAGS) -o $(EXE)

@@ -16,7 +16,7 @@ Request *parse_request(char * buf, const int buf_lim);
 Cache *new_cache();
 CachePage *init_page(Response *response);
 Cache *check_cache(unsigned char hash[SHA_DIGEST_LENGTH]);
-void write_page_content(CachePage *cp, size_t pos, char * buf);
+void write_page_content(CachePage *cp, size_t pos, char * buf, size_t write_amount);
 void dealloc_cache();
 void dealloc_cache_frame(Cache *frame);
 
@@ -164,7 +164,7 @@ void transfer_get(char * request_buffer, int conn_ext_fd, int connfd, size_t rec
 
     if (c) {
         cp = init_page(response);
-        cache->page = cp;
+        c->page = cp;
     }
 
     // Write the header
@@ -174,10 +174,20 @@ void transfer_get(char * request_buffer, int conn_ext_fd, int connfd, size_t rec
     while (remainder) {
         recieved = read(conn_ext_fd, request_buffer, (remainder > MAXBUF) ? MAXBUF : remainder);
         sent = write(connfd, request_buffer, recieved);
+        if (c) write_page_content(cp, response->content_length - remainder, request_buffer, recieved);
         remainder -= recieved;
     }
+}
 
-    free(response);
+void serve_from_cache(CachePage *cp, int connfd) {
+    size_t sent, remainder, total = 0;
+    sent = write(connfd, cp->response->header, strlen(cp->response->header));
+    remainder = cp->response->content_length;
+    while(remainder) {
+        sent = write(connfd, cp->page + total, (MAXBUF > remainder) ? remainder : MAXBUF);
+        remainder -= sent;
+        total += sent;
+    }
 }
 
 /*
@@ -210,7 +220,6 @@ void handle_request(int connfd) {
 
     // Read the request
     recieved = read(connfd, request_buffer, MAXBUF);
-    // fprintf(stderr, "%s\n\n", request_buffer);
     if (recieved) { // Content received from socket
         Request *request = parse_request(request_buffer, MAXBUF);
         if (request->host) {
@@ -221,18 +230,17 @@ void handle_request(int connfd) {
                 if (strcmp(request->reqtype, "GET")) {
                     transfer_400(connfd);
                 } else {
-                    sscanf(request_buffer, "%255[^\n]", line);
-                    fprintf(stderr, "%s\n", line);
+                    sscanf(request_buffer, "%255[^\n]", line);;
                     SHA1((unsigned char *) line, strlen(line), hash);
                     Cache * c = check_cache(hash);
                     if (!c) {
                         c = new_cache(hash);
+                        transfer_get(request_buffer, conn_ext_fd, connfd, recieved, c);
                     } else {
-                        fprintf(stderr, "cache hit");
-                        c = 0;
+                        serve_from_cache(c->page, connfd);
+                        fprintf(stderr, "Served cached page for request: %s\n", line);
                     }
 
-                    transfer_get(request_buffer, conn_ext_fd, connfd, recieved, c);
                 }
             } else {
                 fprintf(stderr, "Failed to connect to external address");
@@ -343,8 +351,8 @@ Cache *check_cache(unsigned char hash[SHA_DIGEST_LENGTH]) {
 /*
  * write_page_contnent - places the page into the cache
  */
-void write_page_content(CachePage *cp, size_t pos, char * buf) {
-    memcpy(cp->page + pos, buf, (cp->response->content_length - pos > MAXBUF) ? MAXBUF : cp->response->content_length - pos);
+void write_page_content(CachePage *cp, size_t pos, char * buf, size_t write_amount) {
+    memcpy(cp->page + pos, buf, write_amount);
 }
 
 /*
@@ -363,7 +371,8 @@ void dealloc_cache_frame(Cache *frame) {
     if (frame->next) {
         dealloc_cache_frame(frame->next);
     }
-    free(frame->page->page);
-    free(frame->page);
-    free(frame);
+
+    if (frame->page->page) free(frame->page->page);
+    if (frame->page) free(frame->page);
+    if (frame) free(frame);
 }
