@@ -14,6 +14,7 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <errno.h>
 
 #define true 1
 #define false 0

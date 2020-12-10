@@ -1,3 +1,5 @@
+#include <sys/time.h>
+
 #define DFS_LEN 4
 #define ADDR_LEN 50
 #define SERV_IDENT_LEN 20

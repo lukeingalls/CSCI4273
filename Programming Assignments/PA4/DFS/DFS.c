@@ -64,6 +64,10 @@ void receiveFile(CREDS *c, char filename[], size_t file_len, int connfd);
  * \brief takes the creds and the filename passed to get the relative path to the file
  **/
 char *getFilename(CREDS *c, char filename[]);
+/**
+ * Ack user - tells the client whether creds were accepted
+ **/
+void ackUser(char valid, int connfd);
 
 CREDNODE *users = 0;
 
@@ -121,6 +125,7 @@ void handle_request(int connfd) {
             sscanf(request_buffer, "%s %s %s", command, c.username, c.password);
             //Authenticate the user
             if (credExists(&c)) {
+                ackUser(true, connfd);
                 udir = openUDir(&c);
                 switch (command[0]) {
                     case 'g':
@@ -134,6 +139,7 @@ void handle_request(int connfd) {
                 }
                 closedir(udir);
             } else {
+                ackUser(false, connfd);
                 printf("Invalid cred\n");
             }
         } else { // Nothing read from socket: CLOSED
@@ -179,6 +185,7 @@ void catch_sigint(int signo) {
 }
 
 void catch_sigpipe(int signo) {
+    fprintf(stderr, "Sigpipe\n");
     pthread_exit(NULL);
 }
 
@@ -284,6 +291,8 @@ char *getFilename(CREDS *c, char filename[]) {
     return buf;
 }
 
-
+void ackUser(char valid, int connfd) {
+    send(connfd, &valid, sizeof(valid), 0);
+}
 
 

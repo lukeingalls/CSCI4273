@@ -38,6 +38,9 @@ int writeAll(char buf[], int len, int connfd);
  * \brief handles operations relevant to sending a put command
  **/
 void hput(DFS dfs[DFS_LEN], FILE *f, char file_name[], size_t file_size);
+int recvAck(DFS dfs[DFS_LEN]);
+void catch_sigpipe(int signo);
+
 
 void menu()
 {
@@ -60,7 +63,7 @@ int main(int argc, char *argv[])
         exit(EXIT_FAILURE);
     }
 
-    signal(SIGPIPE, SIG_IGN);
+    signal(SIGPIPE, catch_sigpipe);
 
     readConf(dfs, argv[1]);
     connDFS(dfs);
@@ -76,11 +79,21 @@ int main(int argc, char *argv[])
         case 'g':
             sscanf(selection, "%*s %s", file);
             sendCommand(dfs, "get", file, 0);
+            if (recvAck(dfs)) {
+
+            } else {
+                printf("Did not present valid creds!\n");
+            }
             break;
         case '2':
         case 'L':
         case 'l':
             sendCommand(dfs, "list", "", 0);
+            if (recvAck(dfs)) {
+
+            } else {
+                printf("Did not present valid creds!\n");
+            }
             break;
         case '3':
         case 'P':
@@ -98,6 +111,11 @@ int main(int argc, char *argv[])
                 unsigned long filesize = ftell(f);
                 rewind(f);
                 sendCommand(dfs, "put", file, filesize);
+                if (recvAck(dfs)) {
+
+                } else {
+                    printf("Did not present valid creds!\n");
+                }
                 sendFile(dfs, f, filesize);
                 // hput(dfs, f, file, filesize);
             }
@@ -171,7 +189,7 @@ void connDFS(DFS dfs[DFS_LEN])
     // check whether any server is active
     int any_active = false;
 
-    for (DFS *d = &dfs[DFS_LEN - 1]; d >= dfs; d--)
+    for (DFS *d = &dfs[0]; d < dfs + 4; d++)
     {
         d->active = true;
         if ((d->host = gethostbyname(d->url)) == 0)
@@ -193,6 +211,13 @@ void connDFS(DFS dfs[DFS_LEN])
             {
                 d->active = false;
                 fprintf(stderr, "Failed to connect to server %s\n", d->server_ident);
+            } else { // connection worked
+                struct timeval timeout;
+                timeout.tv_sec = 1;
+                timeout.tv_usec = 0;
+                if (setsockopt (d->connfd, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout,
+                                sizeof(timeout)) < 0)
+				    perror("setsockopt failed\n");
             }
         }
 
@@ -223,7 +248,6 @@ void sendCommand(DFS dfs[DFS_LEN], char command[10], char file[], unsigned long 
         { //put
             unsigned long relative_len = (file_size + (file_size + i) % 4) / 4;
             sprintf(buf, "%s %s %s %s %lu\n", command, creds.username, creds.password, file, relative_len);
-            printf("%lu\n", relative_len);
         }
         if (dfs[i].active && !write(dfs[i].connfd, buf, (strlen(buf) >= MAXBUF) ? MAXBUF : strlen(buf) + 1))
         {
@@ -245,7 +269,7 @@ void sendFile(DFS dfs[DFS_LEN], FILE *f, unsigned long file_size)
 {
     unsigned long relative_len;
     char buf[MAXBUF];
-    size_t sent, read;
+    ssize_t sent, read;
 
     for (int i = 0; i < DFS_LEN; i++)
     {
@@ -256,10 +280,12 @@ void sendFile(DFS dfs[DFS_LEN], FILE *f, unsigned long file_size)
         {
             if ((read = fread(buf, 1, (relative_len > MAXBUF) ? MAXBUF : relative_len, f)))
             {
-                if (!(sent = writeAll(buf, read, dfs[i].connfd))) {
-                    printf("Cannot write to the socket %d\n", dfs[i].connfd);
-                    break;
-                }
+                // if (!(sent = writeAll(buf, read, dfs[i].connfd))) {
+                //     printf("Cannot write to the socket %d\n", dfs[i].connfd);
+                //     break;
+                // }
+                write(dfs[i].connfd, buf, read);
+                break;
             } else {
                 break;
             }
@@ -281,13 +307,22 @@ int writeAll(char buf[], int len, int connfd) {
     return pos;
 } 
 
-void hput(DFS dfs[DFS_LEN], FILE *f, char file_name[], size_t file_size) {
-    connDFS(dfs);
-    sendCommand(dfs, "put", file_name, file_size);
-    sendFile(dfs, f, file_size);
-    closeDFS(dfs);
+void catch_sigpipe(int signo) {
+    fprintf(stderr, "caught sigpipe\n");
 }
 
-void catch_sigpipe(int signo) {
-    pthread_exit(NULL);
+int recvAck(DFS dfs[DFS_LEN])
+{
+    int resp = 0, temp;
+    ssize_t t;
+    for (int i = 0; i < DFS_LEN; i++)
+    {
+        if ((t = read(dfs[i].connfd, &temp, sizeof(char))))
+        {
+            if (t != -1) {
+                resp |= temp;
+            }
+        }
+    }
+    return resp;
 }
