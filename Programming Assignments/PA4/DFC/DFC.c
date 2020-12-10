@@ -8,6 +8,15 @@ CREDS creds;
 
 FNODE *head = 0;
 
+int table[DFS_LEN][DFS_LEN][2] = {
+    { {4, 1}, {1, 2}, {2, 3}, {3, 4} },
+    { {1, 2}, {2, 3}, {3, 4}, {4, 1} },
+    { {2, 3}, {3, 4}, {4, 1}, {1, 2} },
+    { {3, 4}, {4, 1}, {1, 2}, {2, 3} },
+};
+
+
+
 /**
  * \brief Reads in the information from the conf file
  * \param dfs an array of DFS objects
@@ -46,6 +55,7 @@ FNODE *fileExists(FNODE *f);
 int insertNode(FNODE *f);
 void printList();
 void get(DFS dfs[DFS_LEN], char file[]);
+int hashmod(FILE *f);
 
 void menu()
 {
@@ -54,6 +64,37 @@ void menu()
     printf("2) List\n");
     printf("3) Put <file>\n");
     printf("4) Quit\n");
+}
+
+void sendPutCommand(DFS dfs[DFS_LEN], int index, int hash, char file[], unsigned long file_size)
+{
+    char buf[MAXBUF];
+    for (int i = 0; i < DFS_LEN; i++)
+    {
+        unsigned long relative_len = (file_size + ((file_size + i)) % 4) / 4;
+        sprintf(buf, "%s %s %s %s %lu\n", "put", creds.username, creds.password, file, relative_len);
+        // printf("%s\n", buf);
+        write(dfs[table[hash][i][index] - 1].connfd, buf, (strlen(buf) >= MAXBUF) ? MAXBUF : strlen(buf) + 1);
+        // if (write(dfs[table[hash][i][index] - 1].connfd, buf, (strlen(buf) >= MAXBUF) ? MAXBUF : strlen(buf) + 1) <= 0)
+        // {
+        //     printf("Skipped server %s\n", dfs[table[hash][i][index]].server_ident);
+        // }
+    }
+}
+
+int recvHashAck(DFS dfs[DFS_LEN], int hash, int index)
+{
+    int resp = 0, temp;
+    ssize_t t;
+    for (int i = 0; i < DFS_LEN; i++)
+    {
+        int idx = table[hash][i][index] - 1;
+        if ((t = read(dfs[idx].connfd, &temp, sizeof(char))) > 0)
+        {
+            resp |= temp;
+        }
+    }
+    return resp;
 }
 
 int main(int argc, char *argv[])
@@ -118,14 +159,18 @@ int main(int argc, char *argv[])
             {
                 unsigned long filesize = ftell(f);
                 rewind(f);
-                sendCommand(dfs, "put", file, filesize);
-                if (recvAck(dfs))
-                {
-                    sendFile(dfs, f, filesize);
-                }
-                else
-                {
-                    printf("Did not present valid creds!\n");
+                int hash = hashmod(f);
+                for (int iterations = 0; iterations < 2; iterations++) {
+                    sendPutCommand(dfs, iterations, hash, file, filesize);
+                    // sendCommand(dfs, "put", file, filesize);
+                    if (recvHashAck(dfs, hash, iterations))
+                    {
+                        sendFile(dfs, f, filesize);
+                    }
+                    else
+                    {
+                        printf("Did not present valid creds!\n");
+                    }
                 }
             }
             break;
@@ -282,11 +327,14 @@ void sendFile(DFS dfs[DFS_LEN], FILE *f, unsigned long file_size)
     char buf[MAXBUF];
     ssize_t sent, read;
     char part;
-
+    int hash = hashmod(f);
+    
     for (int i = 0; i < DFS_LEN; i++)
     {
         part = i;
-        write(dfs[i].connfd, &part, sizeof(char));
+        int idx = table[hash][i][0] - 1;
+        // printf("Idx: %d, part: %d\n", idx, (int) part);
+        write(dfs[idx].connfd, &part, sizeof(char));
         for (
             relative_len = (file_size + (file_size + i) % 4) / 4;
             relative_len > 0;
@@ -298,7 +346,8 @@ void sendFile(DFS dfs[DFS_LEN], FILE *f, unsigned long file_size)
                 //     printf("Cannot write to the socket %d\n", dfs[i].connfd);
                 //     break;
                 // }
-                write(dfs[i].connfd, buf, read);
+                // printf("Relative length: %lu\n", relative_len);
+                write(dfs[idx].connfd, buf, read);
                 break;
             }
             else
@@ -564,4 +613,20 @@ void get(DFS dfs[DFS_LEN], char file[])
     } else {
         printf("Your credentials are invalid!\n");
     }
+}
+
+int hashmod(FILE *f) {
+    unsigned char c[MD5_DIGEST_LENGTH];
+    MD5_CTX mdContext;
+    int bytes;
+    unsigned char data[1024];
+
+    MD5_Init (&mdContext);
+    while ((bytes = fread (data, 1, 1024, f)) != 0)
+        MD5_Update (&mdContext, data, bytes);
+    MD5_Final (c,&mdContext);
+
+    rewind(f);
+
+    return c[MD5_DIGEST_LENGTH - 1] % 4;
 }

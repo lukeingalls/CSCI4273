@@ -314,12 +314,14 @@ void receiveFile(CREDS *c, char filename[], size_t file_len, int connfd)
     {
         while (file_len)
         {
-            if ((r = read(connfd, buf, MAXBUF)))
+            // printf("File length: %lu, Part: %d\n", file_len, (int) part);
+            if ((r = read(connfd, buf, file_len)) > 0)
             {
+                // printf("items read: %lu\n", r);
                 written = fwrite(buf, 1, r, f);
-                fprintf(stderr, "%lu\n", written);
+                // fprintf(stderr, "items written: %lu\n", written);
                 file_len -= written;
-                fprintf(stderr, "%lu\n", file_len);
+                // fprintf(stderr, "remaining: %lu\n", file_len);
             }
             else
             {
@@ -345,7 +347,9 @@ char *getFilename(CREDS *c, char filename[], char part)
 
 void ackUser(char valid, int connfd)
 {
-    send(connfd, &valid, sizeof(valid), 0);
+    if (send(connfd, &valid, sizeof(valid), 0) <= 0) {
+        printf("Problem sending ACK\n");
+    }
 }
 
 // This is mostly borrowed from PA1
