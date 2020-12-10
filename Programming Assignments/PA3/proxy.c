@@ -270,7 +270,7 @@ void handle_request(int connfd) {
                     if (strcmp(request->reqtype, "GET")) {
                         transfer_400(connfd);
                     } else {
-                        sscanf(request_buffer, "%255[^\n]", line);;
+                        sscanf(request_buffer, "%255[^\n]", line);
                         SHA1((unsigned char *) line, strlen(line), hash);
                         Cache * c = check_cache(hash);
                         if (!c) {
