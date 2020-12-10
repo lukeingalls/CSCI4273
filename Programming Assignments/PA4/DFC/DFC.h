@@ -13,3 +13,9 @@ typedef struct DFS {
     char server_ident[SERV_IDENT_LEN];
     char url[ADDR_LEN];
 } DFS;
+
+typedef struct FNODE {
+    char file_name[100];
+    int part_loc[DFS_LEN];
+    struct FNODE * next;
+} FNODE;

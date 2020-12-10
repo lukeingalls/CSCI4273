@@ -6,6 +6,8 @@
  **/
 CREDS creds;
 
+FNODE *head = 0;
+
 /**
  * \brief Reads in the information from the conf file
  * \param dfs an array of DFS objects
@@ -34,13 +36,15 @@ void sendFile(DFS dfs[DFS_LEN], FILE *f, unsigned long filesize);
  * \brief writes len items from buf to connfd
  **/
 int writeAll(char buf[], int len, int connfd);
-/**
- * \brief handles operations relevant to sending a put command
- **/
-void hput(DFS dfs[DFS_LEN], FILE *f, char file_name[], size_t file_size);
+
 int recvAck(DFS dfs[DFS_LEN]);
 void catch_sigpipe(int signo);
-
+void recvList(DFS dfs[DFS_LEN]);
+void freeCreds(FNODE *cn);
+FNODE *createCred(char fname[100]);
+FNODE *fileExists(FNODE *f);
+int insertNode(FNODE *f);
+void printList();
 
 void menu()
 {
@@ -79,19 +83,27 @@ int main(int argc, char *argv[])
         case 'g':
             sscanf(selection, "%*s %s", file);
             sendCommand(dfs, "get", file, 0);
-            if (recvAck(dfs)) {
-
-            } else {
+            if (recvAck(dfs))
+            {
+            }
+            else
+            {
                 printf("Did not present valid creds!\n");
             }
             break;
         case '2':
         case 'L':
         case 'l':
+            freeCreds(head);
+            head = 0;
             sendCommand(dfs, "list", "", 0);
-            if (recvAck(dfs)) {
-
-            } else {
+            if (recvAck(dfs))
+            {
+                recvList(dfs);
+                printList();
+            }
+            else
+            {
                 printf("Did not present valid creds!\n");
             }
             break;
@@ -111,13 +123,14 @@ int main(int argc, char *argv[])
                 unsigned long filesize = ftell(f);
                 rewind(f);
                 sendCommand(dfs, "put", file, filesize);
-                if (recvAck(dfs)) {
-
-                } else {
+                if (recvAck(dfs))
+                {
+                    sendFile(dfs, f, filesize);
+                }
+                else
+                {
                     printf("Did not present valid creds!\n");
                 }
-                sendFile(dfs, f, filesize);
-                // hput(dfs, f, file, filesize);
             }
             break;
         case '4':
@@ -211,13 +224,15 @@ void connDFS(DFS dfs[DFS_LEN])
             {
                 d->active = false;
                 fprintf(stderr, "Failed to connect to server %s\n", d->server_ident);
-            } else { // connection worked
+            }
+            else
+            { // connection worked
                 struct timeval timeout;
                 timeout.tv_sec = 1;
                 timeout.tv_usec = 0;
-                if (setsockopt (d->connfd, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout,
-                                sizeof(timeout)) < 0)
-				    perror("setsockopt failed\n");
+                if (setsockopt(d->connfd, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout,
+                               sizeof(timeout)) < 0)
+                    perror("setsockopt failed\n");
             }
         }
 
@@ -270,9 +285,12 @@ void sendFile(DFS dfs[DFS_LEN], FILE *f, unsigned long file_size)
     unsigned long relative_len;
     char buf[MAXBUF];
     ssize_t sent, read;
+    char part;
 
     for (int i = 0; i < DFS_LEN; i++)
     {
+        part = i;
+        write(dfs[i].connfd, &part, sizeof(char));
         for (
             relative_len = (file_size + (file_size + i) % 4) / 4;
             relative_len > 0;
@@ -286,28 +304,36 @@ void sendFile(DFS dfs[DFS_LEN], FILE *f, unsigned long file_size)
                 // }
                 write(dfs[i].connfd, buf, read);
                 break;
-            } else {
+            }
+            else
+            {
                 break;
             }
         }
     }
 }
 
-int writeAll(char buf[], int len, int connfd) {
+int writeAll(char buf[], int len, int connfd)
+{
     size_t pos = 0;
     ssize_t sent;
-    while(len) {
-        if ((sent = write(connfd, buf + pos, len)) != -1) {
+    while (len)
+    {
+        if ((sent = write(connfd, buf + pos, len)) != -1)
+        {
             len -= sent;
             pos += sent;
-        } else {
+        }
+        else
+        {
             return 0;
         }
     }
     return pos;
-} 
+}
 
-void catch_sigpipe(int signo) {
+void catch_sigpipe(int signo)
+{
     fprintf(stderr, "caught sigpipe\n");
 }
 
@@ -319,10 +345,116 @@ int recvAck(DFS dfs[DFS_LEN])
     {
         if ((t = read(dfs[i].connfd, &temp, sizeof(char))))
         {
-            if (t != -1) {
+            if (t != -1)
+            {
                 resp |= temp;
             }
         }
     }
     return resp;
+}
+
+void recvList(DFS dfs[DFS_LEN])
+{
+    char buf[MAXBUF], fname[100];
+    int len, part;
+    ssize_t t, pos;
+    for (int i = 0; i < DFS_LEN; i++)
+    {
+        pos = 0;
+        if ((t = read(dfs[i].connfd, buf, MAXBUF)) != -1)
+        {
+            while (t && t != pos)
+            {
+                sscanf(buf + pos, "%*c%s ", fname);
+                len = strlen(fname);
+                pos += len + 2;
+                part = atoi(fname + len - 1);
+                fname[len - 2] = '\0';
+                FNODE *x, *f = createCred(fname);
+                if ((x = fileExists(f)))
+                {
+                    free(f);
+                    f = x;
+                }
+                else
+                {
+                    insertNode(f);
+                }
+                f->part_loc[part] = dfs[i].connfd;
+            }
+        }
+    }
+}
+
+int insertNode(FNODE *f)
+{
+    if (fileExists(f))
+    {
+        return false;
+    }
+    else
+    {
+        f->next = head;
+        head = f;
+        return true;
+    }
+}
+
+FNODE *fileExists(FNODE *f)
+{
+    FNODE *t_user = head;
+    while (t_user)
+    {
+        if (!strcmp(t_user->file_name, f->file_name))
+        {
+            return t_user;
+        }
+        else
+        {
+            t_user = t_user->next;
+        }
+    }
+    return 0;
+}
+
+FNODE *createCred(char fname[100])
+{
+    FNODE *c = (FNODE *)malloc(sizeof(FNODE));
+    strncpy(c->file_name, fname, 99);
+    for (int i = 0; i < DFS_LEN; i++)
+    {
+        c->part_loc[i] = -1;
+    }
+    return c;
+}
+
+void freeCreds(FNODE *cn)
+{
+    if (cn)
+    {
+        freeCreds(cn->next);
+        free(cn);
+    }
+}
+
+void printList()
+{
+    FNODE *t_user = head;
+    while (t_user)
+    {
+        if (
+            t_user->part_loc[0] != -1 &&
+            t_user->part_loc[1] != -1 &&
+            t_user->part_loc[2] != -1 &&
+            t_user->part_loc[3] != -1)
+        {
+            printf("%s\n", t_user->file_name);
+        }
+        else
+        {
+            printf("%s [incomplete]\n", t_user->file_name);
+        }
+        t_user = t_user->next;
+    }
 }
