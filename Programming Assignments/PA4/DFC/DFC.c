@@ -73,8 +73,8 @@ void sendPutCommand(DFS dfs[DFS_LEN], int index, int hash, char file[], unsigned
     {
         unsigned long relative_len = (file_size + ((file_size + i)) % 4) / 4;
         sprintf(buf, "%s %s %s %s %lu\n", "put", creds.username, creds.password, file, relative_len);
-        // printf("%s\n", buf);
-        write(dfs[table[hash][i][index] - 1].connfd, buf, (strlen(buf) >= MAXBUF) ? MAXBUF : strlen(buf) + 1);
+        fprintf(stderr, "%s\n", buf);
+        write(dfs[table[hash][i][index] - 1].connfd, buf, MAXBUF);
         // if (write(dfs[table[hash][i][index] - 1].connfd, buf, (strlen(buf) >= MAXBUF) ? MAXBUF : strlen(buf) + 1) <= 0)
         // {
         //     printf("Skipped server %s\n", dfs[table[hash][i][index]].server_ident);
@@ -304,10 +304,8 @@ void sendCommand(DFS dfs[DFS_LEN], char command[10], char file[], unsigned long 
             unsigned long relative_len = (file_size + (file_size + i) % 4) / 4;
             sprintf(buf, "%s %s %s %s %lu\n", command, creds.username, creds.password, file, relative_len);
         }
-        if (dfs[i].active && !write(dfs[i].connfd, buf, (strlen(buf) >= MAXBUF) ? MAXBUF : strlen(buf) + 1))
-        {
-            dfs[i].active = false;
-        }
+        fprintf(stderr, "%s\n", buf);
+        write(dfs[i].connfd, buf, MAXBUF);
     }
 }
 
@@ -526,8 +524,8 @@ void receiveFile(FILE *f, size_t file_len, int connfd)
     size_t r, written;
     if (f)
     {
-        // while (file_len)
-        // {
+        while (file_len)
+        {
             if ((r = read(connfd, buf, file_len)) > 0)
             {
                 written = fwrite(buf, 1, r, f);
@@ -536,9 +534,9 @@ void receiveFile(FILE *f, size_t file_len, int connfd)
             else
             {
                 fprintf(stderr, "Failed to read anything\n");
-                // break;
+                break;
             }
-        // }
+        }
     }
 }
 
@@ -546,7 +544,8 @@ void sendOneCommand(int connfd, char file[])
 {
     char buf[MAXBUF];
     sprintf(buf, "get %s %s %s\n", creds.username, creds.password, file);
-    write(connfd, buf, (strlen(buf) >= MAXBUF) ? MAXBUF : strlen(buf) + 1);
+    fprintf(stderr, "%s\n", buf);
+    write(connfd, buf, MAXBUF);
 }
 
 int recvOneAck(int connfd)
