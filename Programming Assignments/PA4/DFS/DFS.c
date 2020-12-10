@@ -378,7 +378,7 @@ void sendFile(CREDS *c, char filename[], int connfd)
     char fullfilename[100], buf[MAXBUF];
     sprintf(fullfilename, "./%s/%s", c->username, filename);
     FILE *f = fopen(fullfilename, "rb");
-    printf("Sending back file %s\n", fullfilename);
+    // printf("Sending back file %s\n", fullfilename);
     if (f)
     {
         if (fseek(f, 0, SEEK_END))
@@ -392,7 +392,7 @@ void sendFile(CREDS *c, char filename[], int connfd)
             ssize_t read;
             rewind(f);
 
-            fprintf(stderr, "file size: %lu\n", filesize);
+            // fprintf(stderr, "file size: %lu\n", filesize);
             write(connfd, &filesize, sizeof(filesize));
 
             if ((read = fread(buf, 1, (filesize > MAXBUF) ? MAXBUF : filesize, f)))
@@ -400,7 +400,7 @@ void sendFile(CREDS *c, char filename[], int connfd)
                 write(connfd, buf, read);
             }
             buf[read] = '\0';
-            fprintf(stderr, "content: %s", buf);
+            // fprintf(stderr, "content: %s", buf);
         }
         fclose(f);
     }

@@ -126,7 +126,6 @@ int main(int argc, char *argv[])
         case 'g':
             sscanf(selection, "%*s %s", file);
             get(dfs, file);
-            return 0;
             break;
         case '2':
         case 'L':
@@ -547,10 +546,7 @@ void sendOneCommand(int connfd, char file[])
 {
     char buf[MAXBUF];
     sprintf(buf, "get %s %s %s\n", creds.username, creds.password, file);
-    for (int i = 0; i < DFS_LEN; i++)
-    {
-        write(connfd, buf, (strlen(buf) >= MAXBUF) ? MAXBUF : strlen(buf) + 1);
-    }
+    write(connfd, buf, (strlen(buf) >= MAXBUF) ? MAXBUF : strlen(buf) + 1);
 }
 
 int recvOneAck(int connfd)
@@ -597,7 +593,7 @@ void get(DFS dfs[DFS_LEN], char file[])
                     sprintf(buf, ".%s.%d", file, i);
                     sendOneCommand(f->part_loc[i], buf);
                     recvOneAck(f->part_loc[i]);
-                    if (read(f->part_loc[i], &size, MAXBUF) > 0)
+                    if (read(f->part_loc[i], &size, sizeof(size)) > 0)
                     {
                         if (size) receiveFile(fout, size, f->part_loc[i]);
                     }
