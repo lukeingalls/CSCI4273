@@ -45,6 +45,7 @@ FNODE *createCred(char fname[100]);
 FNODE *fileExists(FNODE *f);
 int insertNode(FNODE *f);
 void printList();
+void get(DFS dfs[DFS_LEN], char file[]);
 
 void menu()
 {
@@ -67,7 +68,8 @@ int main(int argc, char *argv[])
         exit(EXIT_FAILURE);
     }
 
-    signal(SIGPIPE, catch_sigpipe);
+    // signal(SIGPIPE, catch_sigpipe);
+    signal(SIGPIPE, SIG_IGN);
 
     readConf(dfs, argv[1]);
     connDFS(dfs);
@@ -82,14 +84,8 @@ int main(int argc, char *argv[])
         case 'G':
         case 'g':
             sscanf(selection, "%*s %s", file);
-            sendCommand(dfs, "get", file, 0);
-            if (recvAck(dfs))
-            {
-            }
-            else
-            {
-                printf("Did not present valid creds!\n");
-            }
+            get(dfs, file);
+            return 0;
             break;
         case '2':
         case 'L':
@@ -456,5 +452,116 @@ void printList()
             printf("%s [incomplete]\n", t_user->file_name);
         }
         t_user = t_user->next;
+    }
+}
+
+FNODE *findNode(char fname[100])
+{
+    FNODE *t_user = head;
+    while (t_user)
+    {
+        if (!strcmp(t_user->file_name, fname))
+        {
+            return t_user;
+        }
+        else
+        {
+            t_user = t_user->next;
+        }
+    }
+    return 0;
+}
+
+void receiveFile(FILE *f, size_t file_len, int connfd)
+{
+    char buf[MAXBUF];
+    size_t r, written;
+    if (f)
+    {
+        // while (file_len)
+        // {
+            if ((r = read(connfd, buf, file_len)) > 0)
+            {
+                written = fwrite(buf, 1, r, f);
+                file_len -= written;
+            }
+            else
+            {
+                fprintf(stderr, "Failed to read anything\n");
+                // break;
+            }
+        // }
+    }
+}
+
+void sendOneCommand(int connfd, char file[])
+{
+    char buf[MAXBUF];
+    sprintf(buf, "get %s %s %s\n", creds.username, creds.password, file);
+    for (int i = 0; i < DFS_LEN; i++)
+    {
+        write(connfd, buf, (strlen(buf) >= MAXBUF) ? MAXBUF : strlen(buf) + 1);
+    }
+}
+
+int recvOneAck(int connfd)
+{
+    int resp = 0, temp;
+    ssize_t t;
+    if ((t = read(connfd, &temp, sizeof(char))))
+    {
+        if (t != -1)
+        {
+            resp |= temp;
+        }
+    }
+    return resp;
+}
+
+void get(DFS dfs[DFS_LEN], char file[])
+{
+    char buf[MAXBUF];
+
+    // First get the current list info
+    // ===============================
+    freeCreds(head);
+    head = 0;
+    sendCommand(dfs, "list", "", 0);
+    if (recvAck(dfs))
+    {
+        recvList(dfs);
+        // ===============================
+        FNODE *f = findNode(file);
+        if (
+            f &&
+            f->part_loc[0] != -1 &&
+            f->part_loc[1] != -1 &&
+            f->part_loc[2] != -1 &&
+            f->part_loc[3] != -1)
+        {
+            FILE *fout = fopen(f->file_name, "wb");
+            if (fout)
+            {
+                unsigned long size;
+                for (int i = 0; i < DFS_LEN; i++)
+                {
+                    sprintf(buf, ".%s.%d", file, i);
+                    sendOneCommand(f->part_loc[i], buf);
+                    recvOneAck(f->part_loc[i]);
+                    if (read(f->part_loc[i], &size, MAXBUF) > 0)
+                    {
+                        if (size) receiveFile(fout, size, f->part_loc[i]);
+                    }
+                }
+                fclose(fout);
+            }
+        }
+        else
+        {
+            printf("The file { %s } is unavailible!\n", file);
+            return;
+        }
+    } else {
+        printf("Your credentials are invalid!\n");
     }
 }

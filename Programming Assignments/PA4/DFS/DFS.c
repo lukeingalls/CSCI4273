@@ -69,6 +69,7 @@ char *getFilename(CREDS *c, char filename[], char part);
  **/
 void ackUser(char valid, int connfd);
 void sendList(DIR *udir, int connfd);
+void sendFile(CREDS *c, char filename[], int connfd);
 
 CREDNODE *users = 0;
 
@@ -139,6 +140,8 @@ void handle_request(int connfd)
                 switch (command[0])
                 {
                 case 'g':
+                    sscanf(request_buffer, "%*s %*s %*s %s", filename);
+                    sendFile(&c, filename, connfd);
                     break;
                 case 'l':
                     sendList(udir, connfd);
@@ -335,7 +338,6 @@ void receiveFile(CREDS *c, char filename[], size_t file_len, int connfd)
 
 char *getFilename(CREDS *c, char filename[], char part)
 {
-    // TODO: Implement logic for pieces
     char *buf = (char *)malloc(sizeof(char) * 100);
     sprintf(buf, "./%s/.%s.%d", c->username, filename, (int)part);
     return buf;
@@ -364,5 +366,38 @@ void sendList(DIR *udir, int connfd)
         }
         // Forward it to user
         write(connfd, lsBody, pos);
+    }
+}
+
+void sendFile(CREDS *c, char filename[], int connfd)
+{
+    char fullfilename[100], buf[MAXBUF];
+    sprintf(fullfilename, "./%s/%s", c->username, filename);
+    FILE *f = fopen(fullfilename, "rb");
+    printf("Sending back file %s\n", fullfilename);
+    if (f)
+    {
+        if (fseek(f, 0, SEEK_END))
+        {
+            fprintf(stderr, "File failed top open or could not get file size!\n");
+            return;
+        }
+        else
+        {
+            unsigned long filesize = ftell(f);
+            ssize_t read;
+            rewind(f);
+
+            fprintf(stderr, "file size: %lu\n", filesize);
+            write(connfd, &filesize, sizeof(filesize));
+
+            if ((read = fread(buf, 1, (filesize > MAXBUF) ? MAXBUF : filesize, f)))
+            {
+                write(connfd, buf, read);
+            }
+            buf[read] = '\0';
+            fprintf(stderr, "content: %s", buf);
+        }
+        fclose(f);
     }
 }
